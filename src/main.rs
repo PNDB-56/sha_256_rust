@@ -1,10 +1,9 @@
-
 // H and K is defined in https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.180-4.pdf
 const H: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-struct compress_h {
+struct CompressH {
     a: u32,
     b: u32,
     c: u32,
@@ -26,69 +25,19 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
-const TWO_POWERS: [u32; 32] = [
-    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072,
-    262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728,
-    268435456, 536870912, 1073741824, 2147483648,
-];
-
-fn u64_to_bits(mut n: u64) -> [u8; 64] {
-    let mut bits = [0 as u8; 64];
-    for i in 0..64 {
-        bits[63 - i] = (n & 1) as u8;
-        n = n >> 1;
-    }
-    bits
-}
-
-fn convert_u8s_to_u32(v: &[u8]) -> u32 {
-    let mut pow = 32;
-    let mut ans: u32 = 0;
-    for i in v {
-        let mut x = *i as i32;
-
-        for j in 0..8 {
-            ans += TWO_POWERS[pow - 8 + j] * ((x & 1) as u32);
-            x = x >> 1;
-        }
-        pow -= 8;
-    }
-    ans
-}
-
-fn convert_64_bits_to_u8(bits: [u8; 64]) -> [u8; 8] {
-    let mut u8s: [u8; 8] = [0; 8];
-    for i in 0..8 {
-        let mut val: u8 = 0;
-        for j in 0..8 {
-            let ind = i * 8 + j;
-            if bits[ind] == 1 {
-                val += TWO_POWERS[7 - j] as u8;
-            }
-        }
-        u8s[i] = val;
-    }
-    u8s
-}
-
-fn convert_u64_to_u8s(n: u64) -> [u8; 8] {
-    convert_64_bits_to_u8(u64_to_bits(n))
-}
 
 fn pad_msg(v: &str) -> Vec<u8> {
-    let mut msg_as_bytes: Vec<u8> = v.as_bytes().iter().map(|x| *x).collect();
+    let mut msg_as_bytes: Vec<u8> = v.as_bytes().to_vec();
     let original_msg_size: u64 = msg_as_bytes.len() as u64;
 
-    msg_as_bytes.push(80); // to add bit 1 after the message: since we deal in bytes (u8) 1000_0000 = 80  
+    msg_as_bytes.push(128); // to add bit 1 after the message: since we deal in bytes (u8) 1000_0000 = 128  
     let bytes_diff_from_64: u64 = 64 - 8 - (msg_as_bytes.len() % 64) as u64; // 64 - total bytes (512 bits); 8 - (reserving 8 bytes for original msg len)
 
     for _ in 0..bytes_diff_from_64 {
         msg_as_bytes.push(0);
     }
 
-    for i in convert_u64_to_u8s(original_msg_size) {
-        msg_as_bytes.push(i);
-    }
+    msg_as_bytes.extend_from_slice(&(original_msg_size * 8).to_be_bytes()); // original msg size in bits not bytes
 
     assert!(
         msg_as_bytes.len() % 64 == 0,
@@ -99,7 +48,7 @@ fn pad_msg(v: &str) -> Vec<u8> {
         )
     );
 
-    print!("{:?} {}  ", msg_as_bytes, original_msg_size,);
+    // println!("{:?} in bits {}  ", msg_as_bytes, original_msg_size * 8,);
     msg_as_bytes
 }
 
@@ -112,7 +61,13 @@ fn prepare_msg(v: &[u8]) -> Vec<u32> {
     let mut msg: Vec<u32> = Vec::with_capacity(64);
     let mut ind = 0;
     while ind < 64 {
-        msg.push(convert_u8s_to_u32(&v[ind..(ind + 4)]));
+        // msg.push(convert_u8s_to_u32(&v[ind..(ind + 4)]));
+        msg.push(u32::from_be_bytes([
+            v[ind],
+            v[ind + 1],
+            v[ind + 2],
+            v[ind + 3],
+        ]));
         ind += 4;
     }
     assert!(
@@ -120,7 +75,7 @@ fn prepare_msg(v: &[u8]) -> Vec<u32> {
         "Prepare_msg => expected len: 16, found {}",
         msg.len()
     );
-    dbg!(&msg);
+    // dbg!(&msg);
     msg
 }
 
@@ -161,31 +116,75 @@ fn extend_to_64_words(mut v: Vec<u32>) -> Vec<u32> {
 //     c = b
 //     b = a
 //     a = temp1 + temp2
-fn compress_words(v: Vec<u32>, ch: &mut compress_h) {}
+fn compress_words(v: Vec<u32>, ch: &mut CompressH) {
+    for i in 0..64 {
+        let s1 = ch.e.rotate_right(6) ^ ch.e.rotate_right(11) ^ ch.e.rotate_right(25);
+        let ch1 = (ch.e & ch.f) ^ ((!ch.e) & ch.g);
+        let temp1 =
+            ch.h.wrapping_add(s1)
+                .wrapping_add(ch1)
+                .wrapping_add(K[i])
+                .wrapping_add(v[i]);
+        let s0 = ch.a.rotate_right(2) ^ ch.a.rotate_right(13) ^ ch.a.rotate_right(22);
+        let maj = (ch.a & ch.b) ^ (ch.a & ch.c) ^ (ch.b & ch.c);
+        let temp2 = s0.wrapping_add(maj);
+        ch.h = ch.g;
+        ch.g = ch.f;
+        ch.f = ch.e;
+        ch.e = ch.d.wrapping_add(temp1);
+        ch.d = ch.c;
+        ch.c = ch.b;
+        ch.b = ch.a;
+        ch.a = temp1.wrapping_add(temp2);
+    }
+}
 
-fn hash(v: &str) {
+fn hash(v: &str) -> String {
     let msg_as_bytes = pad_msg(v);
+    assert!(msg_as_bytes.len() % 64 == 0);
     let mut ind = 0;
-    let mut ch = compress_h {
-        a: H[0],
-        b: H[1],
-        c: H[2],
-        d: H[3],
-        e: H[4],
-        f: H[5],
-        g: H[6],
-        h: H[7],
-    };
+
+    let mut h = H;
     while ind < msg_as_bytes.len() {
+        let mut ch = CompressH {
+            a: h[0],
+            b: h[1],
+            c: h[2],
+            d: h[3],
+            e: h[4],
+            f: h[5],
+            g: h[6],
+            h: h[7],
+        };
+        let cha_bfr = ch.a;
         let words = prepare_msg(&msg_as_bytes[ind..(ind + 64)]);
         let words = extend_to_64_words(words);
         assert!(words.len() == 64);
         compress_words(words, &mut ch);
+        let cha_aft = ch.a;
+        assert!(cha_bfr != cha_aft);
         ind += 64;
+        h[0] = h[0].wrapping_add(ch.a);
+        h[1] = h[1].wrapping_add(ch.b);
+        h[2] = h[2].wrapping_add(ch.c);
+        h[3] = h[3].wrapping_add(ch.d);
+        h[4] = h[4].wrapping_add(ch.e);
+        h[5] = h[5].wrapping_add(ch.f);
+        h[6] = h[6].wrapping_add(ch.g);
+        h[7] = h[7].wrapping_add(ch.h);
     }
+    let mut ans = String::new();
+    ans.extend(h.iter().map(|x| format!("{:08x}", x)));
+    // println!("{ans}");
+    ans
 }
 
 fn main() {
-    let input = "abdasdsc";
+    let input = "abcd";
     hash(input);
+    assert!(hash("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    assert_eq!(
+        hash(""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }
