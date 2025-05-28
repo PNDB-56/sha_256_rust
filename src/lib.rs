@@ -138,13 +138,10 @@ pub fn hash(v: &str) -> String {
             g: h[6],
             h: h[7],
         };
-        let cha_bfr = ch.a;
         let words = prepare_msg(&msg_as_bytes[ind..(ind + 64)]);
         let words = extend_to_64_words(words);
         assert!(words.len() == 64);
         compress_words(words, &mut ch);
-        let cha_aft = ch.a;
-        assert!(cha_bfr != cha_aft);
         ind += 64;
         h[0] = h[0].wrapping_add(ch.a);
         h[1] = h[1].wrapping_add(ch.b);
